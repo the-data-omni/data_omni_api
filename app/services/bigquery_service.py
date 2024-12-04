@@ -1,4 +1,6 @@
+import logging
 import os
+from flask import jsonify
 from google.cloud import bigquery
 from ..utils.logging_config import logger
 

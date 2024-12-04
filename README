@@ -1,0 +1,7 @@
+// add GOOGLE_APPLICATION_CREDENTIAL
+
+// export GOOGLE_APPLICATION_CREDENTIALS="your-service-account.json"
+
+// add OPENAI API key
+
+// OPENAI_API_KEY="your open ai api key"
