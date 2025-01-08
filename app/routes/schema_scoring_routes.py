@@ -1,5 +1,4 @@
 
-import json
 from flask import Blueprint, jsonify, request
 from flask_cors import CORS
 from ..services.scoring_service import score_gen_ai
@@ -11,6 +10,7 @@ CORS(score_schema_bp)
 
 @score_schema_bp.route('/score_schema', methods=['POST', 'OPTIONS'])
 def score_schema():
+    """score schema on each attribute quaity, field name quality, field description presence, primary and foreign keys, field types, field similarity"""
     # Handle preflight CORS request
     if request.method == "OPTIONS":
         headers = {
@@ -57,15 +57,9 @@ def score_schema():
 
         return jsonify(scores), 200
 
-    except Exception as e:
+    except Exception as e: # pylint: disable=broad-exception-caught
         return jsonify({
             'error': 'Internal Server Error',
             'message': str(e)
         }), 500
 
-
-    except Exception as e:
-        return jsonify({
-            'error': 'Internal Server Error',
-            'message': str(e)
-        }), 500

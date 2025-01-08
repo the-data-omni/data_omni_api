@@ -1,6 +1,8 @@
+"""logger service"""
 import logging
 
 def configure_logging(app):
+    """function configuring logginf"""
     # Basic logging configuration
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(__name__)
