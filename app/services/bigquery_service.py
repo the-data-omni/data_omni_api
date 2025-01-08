@@ -1,35 +1,64 @@
+"""Module providing functions and queries to interact with a BigQuery database."""
+
 import logging
 import re
-import os
+
 from flask import jsonify
 from google.cloud import bigquery
+
 from ..utils.logging_config import logger
 
+
 def get_bigquery_client():
+    """
+    Instantiate and return a BigQuery client.
+    """
     return bigquery.Client()
 
+
 def get_queries(time_interval="90 day"):
+    """
+    Call a query to get historical queries from the past `time_interval`
+    (defaults to 90 days). Returns a dictionary with query text as keys
+    and the number of times each query appeared as values.
+
+    :param time_interval: The time interval for querying historical data.
+    :type time_interval: str
+    :return: Dictionary of queries and their frequencies.
+    :rtype: dict
+    """
     client = get_bigquery_client()
-    query = f"""
+    query = (
+        f"""
         SELECT query, creation_time
         FROM region-us.INFORMATION_SCHEMA.JOBS_BY_PROJECT
         WHERE creation_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {time_interval})
-        AND state = 'DONE'
-        AND job_type = 'QUERY'
-        AND NOT REGEXP_CONTAINS(LOWER(query), r'\\binformation_schema\\b') 
-    """
+          AND state = 'DONE'
+          AND job_type = 'QUERY'
+          AND NOT REGEXP_CONTAINS(LOWER(query), r'\\binformation_schema\\b')
+        """
+    )
     query_job = client.query(query)
     query_counts = {}
+
     for row in query_job.result():
         query_text = row.query
         query_counts[query_text] = query_counts.get(query_text, 0) + 1
+
     return query_counts
 
+
 def get_bigquery_info():
+    """
+    Retrieve BigQuery metadata, including project ID, datasets, tables,
+    and each table's field information (including constraints if available).
+
+    :return: A Flask response (JSON) with project info, or an error response.
+    """
     try:
         client = get_bigquery_client()
         project_id = client.project
-        logger.info(f"BigQuery Client Project: {project_id}")
+        logger.info("BigQuery Client Project: %s", project_id)
 
         project_info = {
             "project_id": project_id,
@@ -38,23 +67,22 @@ def get_bigquery_info():
 
         datasets = list(client.list_datasets())
         if not datasets:
-            logger.info(f"No datasets found in project {project_id}.")
+            logger.info("No datasets found in project: %s", project_id)
             return jsonify(project_info), 200
 
         constraints_data = {}
         for dataset in datasets:
             dataset_id = dataset.dataset_id
-            logger.info(f"Fetching constraints for dataset: {dataset_id}")
+            logger.info("Fetching constraints for dataset: %s", dataset_id)
             constraints = get_constraints(client, dataset_id)
             constraints_data[dataset_id] = constraints
 
         # Build project_info
-        # Add a compiled regex to detect shard patterns like table_YYYYMMDD
         shard_pattern = re.compile(r'^(.*)_\d{8}$')
 
         for dataset in datasets:
             dataset_id = dataset.dataset_id
-            logger.info(f"Processing dataset: {dataset_id}")
+            logger.info("Processing dataset: %s", dataset_id)
             dataset_info = {
                 "dataset_id": dataset_id,
                 "tables": []
@@ -62,44 +90,50 @@ def get_bigquery_info():
 
             tables = client.list_tables(dataset_id)
             if not tables:
-                logger.info(f"No tables found in dataset {dataset_id}.")
+                logger.info("No tables found in dataset: %s", dataset_id)
                 project_info["datasets"].append(dataset_info)
                 continue
 
-            # We'll keep a dictionary (or set) to track which normalized table we’ve added
+            # Track which normalized table has been added
             seen_normalized = set()
 
             for table in tables:
                 original_table_id = table.table_id
-                logger.info(f"Processing table: {original_table_id} in dataset: {dataset_id}")
-
-                # Check if it matches the shard pattern (e.g. ga_sessions_20170701)
+                logger.info(
+                    "Processing table: %s in dataset: %s",
+                    original_table_id,
+                    dataset_id
+                )
+                # Check if it matches the shard pattern (e.g. table_YYYYMMDD)
                 match = shard_pattern.match(original_table_id)
                 if match:
-                    # Replace with "ga_sessions_*"
-                    normalized_table_id = match.group(1) + '_*'
+                    normalized_table_id = f"{match.group(1)}_*"
                 else:
-                    # If not sharded, keep as is
                     normalized_table_id = original_table_id
 
                 # If we've already handled this normalized table, skip
                 if normalized_table_id in seen_normalized:
-                    logger.info(f"Skipping table {original_table_id} because we already have {normalized_table_id}")
+                    logger.info(
+                        "Skipping table %s because we already have %s",
+                        original_table_id,
+                        normalized_table_id
+                    )
                     continue
 
-                # Otherwise, mark it as seen
+                # Mark as seen
                 seen_normalized.add(normalized_table_id)
 
-                # Now retrieve the schema and constraints for this table
+                # Retrieve schema and constraints for this table
                 table_ref = client.dataset(dataset_id).table(original_table_id)
                 table_obj = client.get_table(table_ref)
-
                 table_field_info = get_field_info(table_obj.schema)
-
                 constraints = constraints_data.get(dataset_id, {})
                 enriched_fields = []
+
                 for field in table_field_info:
-                    enriched_field = enrich_field_with_constraints(field, original_table_id, constraints)
+                    enriched_field = enrich_field_with_constraints(
+                        field, original_table_id, constraints
+                    )
                     enriched_fields.append(enriched_field)
 
                 dataset_info["tables"].append({
@@ -111,15 +145,24 @@ def get_bigquery_info():
 
         return jsonify(project_info), 200
 
-    except Exception as e:
-        logger.error(f"Error processing BigQuery info: {str(e)}")
-        error_response = jsonify({"error": f"An error occurred: {str(e)}"})
+    except Exception as exc: # pylint: disable=broad-exception-caught
+        logger.error("Error processing BigQuery info: %s", str(exc))
+        error_response = jsonify({"error": f"An error occurred: {exc}"})
         return error_response, 500
-# Helper functions for the /bigquery_info route
+
+
 def get_constraints(client, dataset_id: str):
     """
-    Fetch primary key and foreign key constraints for a given dataset from INFORMATION_SCHEMA.KEY_COLUMN_USAGE.
-    Returns a dictionary with primary keys and foreign keys.
+    Fetch primary key and foreign key constraints for a given dataset
+    from INFORMATION_SCHEMA.KEY_COLUMN_USAGE. Returns a dictionary with
+    primary keys and foreign keys.
+
+    :param client: A BigQuery client.
+    :type client: bigquery.Client
+    :param dataset_id: The dataset ID to fetch constraints for.
+    :type dataset_id: str
+    :return: Dictionary with 'primary_keys' and 'foreign_keys'.
+    :rtype: dict
     """
     key_columns_query = f"""
         SELECT
@@ -134,43 +177,50 @@ def get_constraints(client, dataset_id: str):
     """
 
     try:
-        # Execute the query
         key_columns_results = client.query(key_columns_query).result()
-
-        # Dictionary to store constraints
         constraints = {
-            "primary_keys": {},  # Format: {table_name: [column_names]}
-            "foreign_keys": {},  # Format: {table_name: [column_names]}
+            "primary_keys": {},
+            "foreign_keys": {},
         }
 
-        # Process each row in the results
         for row in key_columns_results:
             table_name = row.TABLE_NAME
             column_name = row.COLUMN_NAME
             constraint_name = row.CONSTRAINT_NAME
             ordinal_position = row.ORDINAL_POSITION
 
-            logging.info(f"Key Found - Table: {table_name}, Column: {column_name}, Constraint: {constraint_name}, Position: {ordinal_position}")
+            logging.info(
+                "Key Found - Table: %s, Column: %s, Constraint: %s, Position: %s",
+                table_name, column_name, constraint_name, ordinal_position
+            )
 
-            # Classify primary keys and foreign keys based on the constraint name pattern
-            if "PK" in constraint_name.upper():  # Example condition for primary keys
+            # Classify primary keys vs foreign keys based on constraint name
+            if "PK" in constraint_name.upper():
                 if table_name not in constraints["primary_keys"]:
                     constraints["primary_keys"][table_name] = []
                 constraints["primary_keys"][table_name].append(column_name)
-                logging.info(f"Primary Key Identified - Table: {table_name}, Column: {column_name}")
-            elif "FK" in constraint_name.upper():  # Example condition for foreign keys
+                logging.info(
+                    "Primary Key Identified - Table: %s, Column: %s",
+                    table_name, column_name
+                )
+            elif "FK" in constraint_name.upper():
                 if table_name not in constraints["foreign_keys"]:
                     constraints["foreign_keys"][table_name] = []
                 constraints["foreign_keys"][table_name].append(column_name)
-                logging.info(f"Foreign Key Identified - Table: {table_name}, Column: {column_name}")
+                logging.info(
+                    "Foreign Key Identified - Table: %s, Column: %s",
+                    table_name, column_name
+                )
             else:
-                logging.warning(f"Unclassified Key - Constraint: {constraint_name}, Table: {table_name}, Column: {column_name}")
+                logging.warning(
+                    "Unclassified Key - Constraint: %s, Table: %s, Column: %s",
+                    constraint_name, table_name, column_name
+                )
 
-        # Output constraints dictionary for further processing
-        logging.info(f"Constraints: {constraints}")
+        logging.info("Constraints: %s", constraints)
 
-    except Exception as e:
-        logging.error(f"An error occurred while fetching constraints: {e}")
+    except Exception as exc: # pylint: disable=broad-exception-caught
+        logging.error("Error fetching constraints: %s", str(exc))
         constraints = {
             "primary_keys": {},
             "foreign_keys": {},
@@ -178,9 +228,19 @@ def get_constraints(client, dataset_id: str):
 
     return constraints
 
+
 def enrich_field_with_constraints(field: dict, table_id: str, constraints: dict) -> dict:
     """
     Enrich a field dictionary with primary key and foreign key information.
+
+    :param field: The field dictionary containing schema information.
+    :type field: dict
+    :param table_id: The table name used to lookup constraints.
+    :type table_id: str
+    :param constraints: Dictionary with primary and foreign keys for the dataset.
+    :type constraints: dict
+    :return: The updated field dictionary with constraint info.
+    :rtype: dict
     """
     column_name = field.get("field_path")
     is_pk = False
@@ -188,16 +248,13 @@ def enrich_field_with_constraints(field: dict, table_id: str, constraints: dict)
     referenced_table = None
     referenced_column = None
 
-    # Check for Primary Key
     if column_name in constraints.get("primary_keys", {}).get(table_id, []):
         is_pk = True
 
-    # Check for Foreign Key
     if column_name in constraints.get("foreign_keys", {}).get(table_id, []):
         is_fk = True
-        # Optionally, you can set referenced_table and referenced_column if available
+        # Optionally set referenced_table/referenced_column if desired
 
-    # Add constraint information to the field
     field["is_primary_key"] = is_pk
     field["is_foreign_key"] = is_fk
     field["referenced_table"] = referenced_table
@@ -205,83 +262,93 @@ def enrich_field_with_constraints(field: dict, table_id: str, constraints: dict)
 
     return field
 
+
 def get_field_info(fields, parent_field_name=""):
     """
-    Recursively extract field information from BigQuery schema, handling nested RECORD types.
+    Recursively extract field information from a BigQuery table schema,
+    handling nested RECORD (STRUCT) types.
+
+    :param fields: The schema fields to process.
+    :type fields: Sequence[bigquery.SchemaField]
+    :param parent_field_name: The dot-delimited parent field name if nested.
+    :type parent_field_name: str
+    :return: A list of dictionaries containing field metadata.
+    :rtype: list
     """
     field_info_list = []
 
     for field in fields:
-        # Generate the full field path
-        full_field_name = f"{parent_field_name}.{field.name}" if parent_field_name else field.name
+        full_field_name = (
+            f"{parent_field_name}.{field.name}"
+            if parent_field_name else field.name
+        )
 
-        if field.field_type == "RECORD":  # Handle nested fields (STRUCT/RECORD)
-            # Recursively process nested fields
+        if field.field_type == "RECORD":
             nested_field_info = get_field_info(field.fields, full_field_name)
             field_info_list.extend(nested_field_info)
         else:
-            # If it's not a RECORD, capture the field details
-            field_info = {
-                'field_path': full_field_name,
-                'data_type': field.field_type,
-                'description': field.description or None,
-                'collation_name': None,  # BigQuery does not support collation
-                'rounding_mode': None    # BigQuery does not support rounding_mode
-            }
-            field_info_list.append(field_info)
+            field_info_list.append({
+                "field_path": full_field_name,
+                "data_type": field.field_type,
+                "description": field.description or None,
+                "collation_name": None,  # BigQuery does not support collation
+                "rounding_mode": None    # BigQuery does not support rounding
+            })
 
     return field_info_list
 
+
 def flatten_bq_schema(project_info: dict) -> list:
     """
-    Convert a nested 'project_info' dict into a flat list of schema objects.
-    Each object looks like:
-      {
-        "table_catalog": str,
-        "table_schema": str,
-        "table_name": str,
-        "column_name": str,
-        "field_path": str,
-        "data_type": str,
-        "description": str or None,
-        "collation_name": "NULL",
-        "rounding_mode": None,
-        "primary_key": bool,
-        "foreign_key": bool
-      }
+    Convert a nested 'project_info' dict (containing datasets and tables)
+    into a flat list of schema objects.
+
+    Each object in the returned list has this structure:
+    {
+      "table_catalog": str,
+      "table_schema": str,
+      "table_name": str,
+      "column_name": str,
+      "field_path": str,
+      "data_type": str,
+      "description": str or None,
+      "collation_name": "NULL",
+      "rounding_mode": None,
+      "primary_key": bool,
+      "foreign_key": bool
+    }
+
+    :param project_info: The project info dictionary with datasets, tables, etc.
+    :type project_info: dict
+    :return: A flattened list of schema objects.
+    :rtype: list
     """
     flattened = []
-    
-    # The top-level project in "project_info" 
-    # (assuming "project_id" is at the top-level)
     top_level_project = project_info.get("project_id", "unknown_project")
 
-    # Safely iterate over datasets
     for dataset in project_info.get("datasets", []):
-        # If each dataset has its own "project_id" instead, you can read it here:
         ds_project_id = dataset.get("project_id", top_level_project)
         ds_id = dataset.get("dataset_id", "")
 
         for table in dataset.get("tables", []):
             tbl_id = table.get("table_id", "")
-            
-            # Now flatten each field
+
             for field in table.get("fields", []):
-                # "column_name" can be separate or the same as "field_path"
                 col_name = field.get("field_path", "")
                 field_path = field.get("field_path", "")
 
                 flattened.append({
-                    "table_catalog": ds_project_id,  # or top_level_project
+                    "table_catalog": ds_project_id,
                     "table_schema": ds_id,
                     "table_name": tbl_id,
-                    "column_name": col_name,         # If you want a separate name, do so here
+                    "column_name": col_name,
                     "field_path": field_path,
                     "data_type": field.get("data_type", ""),
                     "description": field.get("description"),
-                    "collation_name": "NULL",        # Hard-coded or adjust if needed
-                    "rounding_mode": None,           # Hard-coded or adjust if needed
+                    "collation_name": "NULL",
+                    "rounding_mode": None,
                     "primary_key": field.get("is_primary_key", False),
                     "foreign_key": field.get("is_foreign_key", False),
                 })
+
     return flattened

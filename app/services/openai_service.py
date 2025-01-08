@@ -1,7 +1,7 @@
+"""service to use llm (openai) to translate bigquery queries to questions"""
+import os
 import openai
 from openai import OpenAI
-import os
-from ..utils.logging_config import logger
 
 # Set your OpenAI API key
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -31,7 +31,7 @@ def generate_natural_language_question(query):
         print(e.__cause__)  # an underlying Exception, likely raised within httpx.
         return f"Error generating question for: {query}"
     except openai.RateLimitError as e:
-        print("A 429 status code was received; we should back off a bit.")
+        print("A 429 status code was received; we should back off a bit. %s", {e})
         return f"Error generating question for: {query}"
     except openai.APIStatusError as e:
         print("Another non-200-range status code was received")
