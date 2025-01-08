@@ -1,3 +1,4 @@
+
 import json
 from flask import Blueprint, jsonify, request
 from flask_cors import CORS
@@ -37,13 +38,31 @@ def score_schema():
                 'message': 'The "schema" field must be a list'
             }), 422
 
-        # Debugging - print schema if needed
-        print(f"Received schema: {json.dumps(schema, indent=2)}")
-        
-        # Call the scoring service
-        scores = score_gen_ai(schema)
+        # Build a dict of only the parameters that were actually provided
+        score_params = {}
+        if 'similarity_threshold' in data:
+            score_params['similarity_threshold'] = data['similarity_threshold']
+        if 'doc_similarity_meaningful_min' in data:
+            score_params['doc_similarity_meaningful_min'] = data['doc_similarity_meaningful_min']
+        if 'doc_similarity_placeholder_max' in data:
+            score_params['doc_similarity_placeholder_max'] = data['doc_similarity_placeholder_max']
+        if 'weights_override' in data:
+            score_params['weights_override'] = data['weights_override']
+
+        print("Received schema with length:", len(schema))
+        print("Optional parameters (only those passed):", score_params)
+
+        # Now call score_gen_ai with schema plus *only* the present optional parameters:
+        scores = score_gen_ai(schema, **score_params)
 
         return jsonify(scores), 200
+
+    except Exception as e:
+        return jsonify({
+            'error': 'Internal Server Error',
+            'message': str(e)
+        }), 500
+
 
     except Exception as e:
         return jsonify({

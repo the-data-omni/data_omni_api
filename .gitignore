@@ -3,3 +3,5 @@ venv/
 *.json
 
 .env
+
+my_new_env

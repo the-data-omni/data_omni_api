@@ -1,4 +1,5 @@
 import logging
+import re
 import os
 from flask import jsonify
 from google.cloud import bigquery
@@ -30,13 +31,11 @@ def get_bigquery_info():
         project_id = client.project
         logger.info(f"BigQuery Client Project: {project_id}")
 
-        # Initialize the result structure
         project_info = {
             "project_id": project_id,
             "datasets": []
         }
 
-        # Fetch datasets and constraints
         datasets = list(client.list_datasets())
         if not datasets:
             logger.info(f"No datasets found in project {project_id}.")
@@ -49,7 +48,10 @@ def get_bigquery_info():
             constraints = get_constraints(client, dataset_id)
             constraints_data[dataset_id] = constraints
 
-        # Build project info
+        # Build project_info
+        # Add a compiled regex to detect shard patterns like table_YYYYMMDD
+        shard_pattern = re.compile(r'^(.*)_\d{8}$')
+
         for dataset in datasets:
             dataset_id = dataset.dataset_id
             logger.info(f"Processing dataset: {dataset_id}")
@@ -64,9 +66,31 @@ def get_bigquery_info():
                 project_info["datasets"].append(dataset_info)
                 continue
 
+            # We'll keep a dictionary (or set) to track which normalized table we’ve added
+            seen_normalized = set()
+
             for table in tables:
                 original_table_id = table.table_id
                 logger.info(f"Processing table: {original_table_id} in dataset: {dataset_id}")
+
+                # Check if it matches the shard pattern (e.g. ga_sessions_20170701)
+                match = shard_pattern.match(original_table_id)
+                if match:
+                    # Replace with "ga_sessions_*"
+                    normalized_table_id = match.group(1) + '_*'
+                else:
+                    # If not sharded, keep as is
+                    normalized_table_id = original_table_id
+
+                # If we've already handled this normalized table, skip
+                if normalized_table_id in seen_normalized:
+                    logger.info(f"Skipping table {original_table_id} because we already have {normalized_table_id}")
+                    continue
+
+                # Otherwise, mark it as seen
+                seen_normalized.add(normalized_table_id)
+
+                # Now retrieve the schema and constraints for this table
                 table_ref = client.dataset(dataset_id).table(original_table_id)
                 table_obj = client.get_table(table_ref)
 
@@ -79,7 +103,7 @@ def get_bigquery_info():
                     enriched_fields.append(enriched_field)
 
                 dataset_info["tables"].append({
-                    "table_id": original_table_id,
+                    "table_id": normalized_table_id,
                     "fields": enriched_fields
                 })
 
@@ -91,7 +115,6 @@ def get_bigquery_info():
         logger.error(f"Error processing BigQuery info: {str(e)}")
         error_response = jsonify({"error": f"An error occurred: {str(e)}"})
         return error_response, 500
-
 # Helper functions for the /bigquery_info route
 def get_constraints(client, dataset_id: str):
     """
@@ -208,3 +231,57 @@ def get_field_info(fields, parent_field_name=""):
             field_info_list.append(field_info)
 
     return field_info_list
+
+def flatten_bq_schema(project_info: dict) -> list:
+    """
+    Convert a nested 'project_info' dict into a flat list of schema objects.
+    Each object looks like:
+      {
+        "table_catalog": str,
+        "table_schema": str,
+        "table_name": str,
+        "column_name": str,
+        "field_path": str,
+        "data_type": str,
+        "description": str or None,
+        "collation_name": "NULL",
+        "rounding_mode": None,
+        "primary_key": bool,
+        "foreign_key": bool
+      }
+    """
+    flattened = []
+    
+    # The top-level project in "project_info" 
+    # (assuming "project_id" is at the top-level)
+    top_level_project = project_info.get("project_id", "unknown_project")
+
+    # Safely iterate over datasets
+    for dataset in project_info.get("datasets", []):
+        # If each dataset has its own "project_id" instead, you can read it here:
+        ds_project_id = dataset.get("project_id", top_level_project)
+        ds_id = dataset.get("dataset_id", "")
+
+        for table in dataset.get("tables", []):
+            tbl_id = table.get("table_id", "")
+            
+            # Now flatten each field
+            for field in table.get("fields", []):
+                # "column_name" can be separate or the same as "field_path"
+                col_name = field.get("field_path", "")
+                field_path = field.get("field_path", "")
+
+                flattened.append({
+                    "table_catalog": ds_project_id,  # or top_level_project
+                    "table_schema": ds_id,
+                    "table_name": tbl_id,
+                    "column_name": col_name,         # If you want a separate name, do so here
+                    "field_path": field_path,
+                    "data_type": field.get("data_type", ""),
+                    "description": field.get("description"),
+                    "collation_name": "NULL",        # Hard-coded or adjust if needed
+                    "rounding_mode": None,           # Hard-coded or adjust if needed
+                    "primary_key": field.get("is_primary_key", False),
+                    "foreign_key": field.get("is_foreign_key", False),
+                })
+    return flattened
