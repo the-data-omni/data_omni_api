@@ -86,10 +86,11 @@ schema_scoring_api/
    
    By default, this will start the application on `http://127.0.0.1:5000`.
 
-2. **To get schema**, upload your service account file with Read access to metadata and save it in the folder DATA_OMNI_API/ 
+2. **To get schema - Bigquery**, upload your service account file with Read access to metadata and save it to the root folder. 
+
    If you do not want to connect to your bigquery instance, you can skip this step and get the schema manually in the format described in step 4
 
-3. **Send a GET request** to the /bigquery_info endpoint. This will return the schema in the format required for the next step. 
+3. **Send a GET request -Bigquery** to the /bigquery_info endpoint. This will return the schema in the format required for the next step. 
 
     ```http://127.0.0.1:5000/bigquery_info```
 
