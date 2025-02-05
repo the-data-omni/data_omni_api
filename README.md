@@ -23,11 +23,17 @@ schema_scoring_api/
 ├── app/
 │   ├── __init__.py
 │   ├── routes/
-│   │   └── schema_scoring_routes.py
+│   │   ├── biquery_routes.py
+│   │   ├── queries_routes.py
+│   │   ├── schema_scoring_routes.py
 │   ├── services/
-│   │   └── scoring_service.py
+│   │   ├── biquery_service.py
+│   │   ├── openai_service.py
+│   │   ├── scoring_service.py
 │   ├── utils/
 │   │   └── logging_config.py
+├── config,py
+├── README
 ├── requirements.txt
 └── run.py
 ```
@@ -46,8 +52,8 @@ schema_scoring_api/
 1. **Clone the repository**:
 
    ```bash
-   git clone https://github.com/your-username/schema_scoring_api.git
-   cd schema_scoring_api
+   git clone https://github.com/the-data-omni/data_omni_api.git
+   cd data_omni_api
    ```
 
 2. **(Recommended) Create a virtual environment**:
@@ -80,7 +86,14 @@ schema_scoring_api/
    
    By default, this will start the application on `http://127.0.0.1:5000`.
 
-2. **Send a POST request** with the following JSON structure to the /score_schema endpoint.  
+2. **To get schema**, upload your service account file with Read access to metadata and save it in the folder DATA_OMNI_API/ 
+   If you do not want to connect to your bigquery instance, you can skip this step and get the schema manually in the format described in step 4
+
+3. **Send a GET request** to the /bigquery_info endpoint. This will return the schema in the format required for the next step. 
+
+    ```http://127.0.0.1:5000/bigquery_info```
+
+4. **Send a POST request** with the following JSON structure to the /score_schema endpoint.  
 
    ```bash
    curl -X POST -H "Content-Type: application/json" \
@@ -123,7 +136,7 @@ schema_scoring_api/
        }' http://127.0.0.1:5000/score_schema
    ```
 
-3. **Review the response**.
+5. **Review the response**.
 
 ---
 
