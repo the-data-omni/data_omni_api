@@ -19,4 +19,5 @@ def upload_service_account():
         return jsonify({"message": "Service account uploaded successfully."}), 200
  
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        app.logger.error("Exception occurred", exc_info=True)
+        return jsonify({"error": "An internal error has occurred."}), 500
