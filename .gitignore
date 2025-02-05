@@ -5,3 +5,6 @@ venv/
 .env
 
 my_new_env
+
+__pycache__/ 
+
