@@ -8,19 +8,9 @@ score_schema_bp = Blueprint('score_schema_bp', __name__)
 # Enable CORS for this blueprint
 CORS(score_schema_bp)
 
-@score_schema_bp.route('/score_schema', methods=['POST', 'OPTIONS'])
+@score_schema_bp.route('/score_schema', methods=['POST'])
 def score_schema():
     """score schema on each attribute quaity, field name quality, field description presence, primary and foreign keys, field types, field similarity"""
-    # Handle preflight CORS request
-    if request.method == "OPTIONS":
-        headers = {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type, Authorization",
-            "Access-Control-Max-Age": "3600",
-        }
-        return ('', 204, headers)
-    
     try:
         data = request.get_json()
 
@@ -38,7 +28,7 @@ def score_schema():
                 'message': 'The "schema" field must be a list'
             }), 422
 
-        # Build a dict of only the parameters that were actually provided
+        # dict of only the parameters that were actually provided
         score_params = {}
         if 'similarity_threshold' in data:
             score_params['similarity_threshold'] = data['similarity_threshold']
@@ -52,8 +42,10 @@ def score_schema():
         print("Received schema with length:", len(schema))
         print("Optional parameters (only those passed):", score_params)
 
-        # Now call score_gen_ai with schema plus *only* the present optional parameters:
+        # Now call score_gen_ai with schema plus the present optional parameters:
         scores = score_gen_ai(schema, **score_params)
+
+        print("Detailed Score:", scores)
 
         return jsonify(scores), 200
 

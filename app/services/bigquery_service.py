@@ -1,33 +1,62 @@
-"""Module providing functions and queries to interact with a BigQuery database."""
+"""
+Module providing functions and queries to interact with a BigQuery database.
+"""
 
 import logging
 import re
-
-from flask import jsonify
+import os
+from flask import json, jsonify, session
 from google.cloud import bigquery
-
 from ..utils.logging_config import logger
+from google.cloud import bigquery
+from google.oauth2 import service_account
 
 
-def get_bigquery_client():
+
+def get_bigquery_client_from_session():
     """
-    Instantiate and return a BigQuery client.
+    Retrieve a BigQuery client from:
+      1) The user's session-based service account JSON, if present.
+      2) Otherwise, fall back to a local service_account.json file in app/ folder.
+      3) If neither is available, raise an exception.
     """
-    return bigquery.Client()
+    sa_json = session.get("service_account_json")
+
+    if not sa_json:
+        # Fallback: check if there's a local service_account.json in app/ directory
+        service_account_path = os.path.join(
+            os.path.dirname(__file__),  # current directory: app/services
+            "..",                       # go up one level to "app"
+            "service_account.json"
+        )
+
+        if os.path.exists(service_account_path):
+            with open(service_account_path, "r", encoding="utf-8") as f:
+                sa_json = json.load(f)
+        else:
+            raise Exception(
+                "No service account available in session and no local service_account.json found in app/. "
+                "Please upload one via /upload_service_account."
+            )
+
+    # Convert the JSON into credentials and build a BigQuery client
+    creds = service_account.Credentials.from_service_account_info(sa_json)
+    return bigquery.Client(credentials=creds, project=creds.project_id)
 
 
-def get_queries(time_interval="90 day"):
+def get_queries(client: bigquery.Client, time_interval="10 day") -> dict:
     """
     Call a query to get historical queries from the past `time_interval`
     (defaults to 90 days). Returns a dictionary with query text as keys
     and the number of times each query appeared as values.
 
+    :param client: A BigQuery client (user-specific or default).
+    :type client: bigquery.Client
     :param time_interval: The time interval for querying historical data.
     :type time_interval: str
     :return: Dictionary of queries and their frequencies.
     :rtype: dict
     """
-    client = get_bigquery_client()
     query = (
         f"""
         SELECT query, creation_time
@@ -38,6 +67,7 @@ def get_queries(time_interval="90 day"):
           AND NOT REGEXP_CONTAINS(LOWER(query), r'\\binformation_schema\\b')
         """
     )
+    client = get_bigquery_client_from_session()
     query_job = client.query(query)
     query_counts = {}
 
@@ -48,15 +78,17 @@ def get_queries(time_interval="90 day"):
     return query_counts
 
 
-def get_bigquery_info():
+def get_bigquery_info(client: bigquery.Client):
     """
     Retrieve BigQuery metadata, including project ID, datasets, tables,
     and each table's field information (including constraints if available).
 
+    :param client: A BigQuery client (user-specific or default).
+    :type client: bigquery.Client
     :return: A Flask response (JSON) with project info, or an error response.
+    :rtype: Tuple[flask.Response, int]
     """
     try:
-        client = get_bigquery_client()
         project_id = client.project
         logger.info("BigQuery Client Project: %s", project_id)
 
@@ -70,6 +102,7 @@ def get_bigquery_info():
             logger.info("No datasets found in project: %s", project_id)
             return jsonify(project_info), 200
 
+        # Pre-fetch constraints for each dataset
         constraints_data = {}
         for dataset in datasets:
             dataset_id = dataset.dataset_id
@@ -127,12 +160,12 @@ def get_bigquery_info():
                 table_ref = client.dataset(dataset_id).table(original_table_id)
                 table_obj = client.get_table(table_ref)
                 table_field_info = get_field_info(table_obj.schema)
-                constraints = constraints_data.get(dataset_id, {})
-                enriched_fields = []
 
+                dataset_constraints = constraints_data.get(dataset_id, {})
+                enriched_fields = []
                 for field in table_field_info:
                     enriched_field = enrich_field_with_constraints(
-                        field, original_table_id, constraints
+                        field, original_table_id, dataset_constraints
                     )
                     enriched_fields.append(enriched_field)
 
@@ -145,19 +178,19 @@ def get_bigquery_info():
 
         return jsonify(project_info), 200
 
-    except Exception as exc: # pylint: disable=broad-exception-caught
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.error("Error processing BigQuery info: %s", str(exc))
         error_response = jsonify({"error": f"An error occurred: {exc}"})
         return error_response, 500
 
 
-def get_constraints(client, dataset_id: str):
+def get_constraints(client: bigquery.Client, dataset_id: str) -> dict:
     """
     Fetch primary key and foreign key constraints for a given dataset
     from INFORMATION_SCHEMA.KEY_COLUMN_USAGE. Returns a dictionary with
     primary keys and foreign keys.
 
-    :param client: A BigQuery client.
+    :param client: A BigQuery client (user-specific or default).
     :type client: bigquery.Client
     :param dataset_id: The dataset ID to fetch constraints for.
     :type dataset_id: str
@@ -219,7 +252,7 @@ def get_constraints(client, dataset_id: str):
 
         logging.info("Constraints: %s", constraints)
 
-    except Exception as exc: # pylint: disable=broad-exception-caught
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logging.error("Error fetching constraints: %s", str(exc))
         constraints = {
             "primary_keys": {},
@@ -248,9 +281,11 @@ def enrich_field_with_constraints(field: dict, table_id: str, constraints: dict)
     referenced_table = None
     referenced_column = None
 
+    # Check if this column is a primary key
     if column_name in constraints.get("primary_keys", {}).get(table_id, []):
         is_pk = True
 
+    # Check if this column is a foreign key
     if column_name in constraints.get("foreign_keys", {}).get(table_id, []):
         is_fk = True
         # Optionally set referenced_table/referenced_column if desired
@@ -263,7 +298,7 @@ def enrich_field_with_constraints(field: dict, table_id: str, constraints: dict)
     return field
 
 
-def get_field_info(fields, parent_field_name=""):
+def get_field_info(fields, parent_field_name="") -> list:
     """
     Recursively extract field information from a BigQuery table schema,
     handling nested RECORD (STRUCT) types.
@@ -279,8 +314,7 @@ def get_field_info(fields, parent_field_name=""):
 
     for field in fields:
         full_field_name = (
-            f"{parent_field_name}.{field.name}"
-            if parent_field_name else field.name
+            f"{parent_field_name}.{field.name}" if parent_field_name else field.name
         )
 
         if field.field_type == "RECORD":
@@ -345,10 +379,53 @@ def flatten_bq_schema(project_info: dict) -> list:
                     "field_path": field_path,
                     "data_type": field.get("data_type", ""),
                     "description": field.get("description"),
-                    "collation_name": "NULL",
+                    "collation_name": "NULL",  # BigQuery doesn't support collation
                     "rounding_mode": None,
                     "primary_key": field.get("is_primary_key", False),
                     "foreign_key": field.get("is_foreign_key", False),
                 })
 
     return flattened
+
+
+def human_readable_size(num_bytes: float) -> str:
+    """
+    Converts bytes into a human-readable string with B, KB, MB, GB, etc.
+    Example: 1234 bytes -> '1.21 KB'
+    """
+    for unit in ["B", "KB", "MB", "GB", "TB", "PB"]:
+        if num_bytes < 1024.0:
+            return f"{num_bytes:0.2f} {unit}"
+        num_bytes /= 1024.0
+    return f"{num_bytes:0.2f} PB"  # fallback if huge
+
+
+def dry_run_query(client: bigquery.Client, sql_query: str) -> dict:
+    """
+    Executes a dry run of the provided SQL query using the provided
+    BigQuery client and returns the total bytes processed (raw + formatted).
+
+    :param client: A BigQuery client (user-specific or default).
+    :type client: bigquery.Client
+    :param sql_query: The SQL query string to dry-run.
+    :type sql_query: str
+    :return: Dictionary with total_bytes_processed and formatted_bytes_processed.
+    :rtype: dict
+    :raises: Exception if any error occurs during the query.
+    """
+    try:
+        job_config = bigquery.QueryJobConfig(dry_run=True, use_query_cache=False)
+        query_job = client.query(sql_query, job_config=job_config)
+
+        # Get the raw bytes processed
+        raw_bytes = query_job.total_bytes_processed
+        formatted = human_readable_size(raw_bytes)
+        logger.info("Dry-run query processed ~%s bytes (%s).", raw_bytes, formatted)
+
+        return {
+            "total_bytes_processed": raw_bytes,
+            "formatted_bytes_processed": formatted
+        }
+    except Exception as exc:
+        logger.error("Error during dry-run: %s", str(exc))
+        raise

@@ -2,22 +2,21 @@
 import logging
 from collections import defaultdict
 from itertools import combinations
-
+import re
 import spacy
 from sentence_transformers import SentenceTransformer, util
 
-# ------------------------------------------
+
 # Configure Logging
-# ------------------------------------------
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 ch = logging.StreamHandler()
 ch.setLevel(logging.DEBUG)
 logger.addHandler(ch)
 
-# ------------------------------------------
+
 # Load spaCy model with word vectors
-# ------------------------------------------
 nlp = spacy.load("en_core_web_md")
 
 # Reference docs for optional similarity checks in spaCy
@@ -33,8 +32,10 @@ def is_field_name_meaningful_spacy_advanced(
     """
     Check if the field name is likely user-friendly (spaCy-based).
     """
-    # Preprocess underscores => spaces
-    field_name_proc = field_name.strip().replace("_", " ")
+    # Replace underscores and dots with spaces to handle nested fields.
+    # For example, "device.web_info.browser" -> "device web info browser"
+    field_name_proc = field_name.strip()
+    field_name_proc = re.sub(r'[._]+', ' ', field_name_proc)
 
     # Basic length check
     if len(field_name_proc) < 4:
@@ -57,7 +58,7 @@ def is_field_name_meaningful_spacy_advanced(
     if not has_informative_pos:
         return False
 
-    # (Optional) doc-similarity checks
+    # doc-similarity checks
     doc_similarity_meaningful = doc.similarity(doc_meaningful_ref)
     doc_similarity_placeholder = doc.similarity(doc_placeholder_ref)
 
@@ -71,9 +72,7 @@ def is_field_name_meaningful_spacy_advanced(
 
     return True
 
-# ------------------------------------------
 # Initialize local SentenceTransformer model
-# ------------------------------------------
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 
@@ -151,9 +150,7 @@ def score_gen_ai(
     # For numeric scoring: how many fields are "meaningful or described"
     fields_meaningful_or_described = 0
 
-    # ------------------------------------------
     # 1) Evaluate field names for meaningfulness
-    # ------------------------------------------
     for entry in schema:
         field_name = entry['column_name']
         desc_val = entry.get('description')
@@ -178,9 +175,7 @@ def score_gen_ai(
     # (a) Field Names Score
     field_names_score = (fields_meaningful_or_described / total_fields) * weights['field_names']
 
-    # ------------------------------------------
     # 2) Field Descriptions Metric
-    # ------------------------------------------
     fields_with_descriptions = sum(
         1 for entry in schema
         if entry.get('description')
@@ -189,15 +184,12 @@ def score_gen_ai(
     )
     field_descriptions_score = (fields_with_descriptions / total_fields) * weights['field_descriptions']
 
-    # ------------------------------------------
+
     # 3) Field Types Metric
-    # ------------------------------------------
     fields_with_types = sum(1 for entry in schema if entry.get('data_type'))
     field_types_score = (fields_with_types / total_fields) * weights['field_types']
 
-    # ------------------------------------------
     # 4) Keys Presence Metric
-    # ------------------------------------------
     if num_tables > 0:
         tables_dict = defaultdict(list)
         for entry in schema:
@@ -221,9 +213,7 @@ def score_gen_ai(
         logger.error("No tables found in schema.")
         keys_presence_score = 0
 
-    # ------------------------------------------
     # 5) Field Name Similarity Metric
-    # ------------------------------------------
     field_names = [entry['column_name'] for entry in schema]
     field_descriptions_map = {}
     field_table_map = {}
@@ -283,23 +273,28 @@ def score_gen_ai(
         keys_presence_score
     )
 
-    # -------------------
+    def safe_div(score, weight):
+        """Return score/weight if weight != 0, else 0.0."""
+        return (score / weight) if weight else 0.0
+
+
     # Percentages
-    # -------------------
+
     # If you assume sum(weights) is your "max possible score"
     # then total_score / sum(weights) * 100 is your overall %
     sum_weights = sum(weights.values())
 
-    field_names_score_pct = (field_names_score / weights['field_names']) * 100
-    field_descriptions_score_pct = (field_descriptions_score / weights['field_descriptions']) * 100
-    field_name_similarity_score_pct = (field_name_similarity_score / weights['field_name_similarity']) * 100
-    field_types_score_pct = (field_types_score / weights['field_types']) * 100
-    keys_presence_score_pct = (keys_presence_score / weights['keys_presence']) * 100
-    total_score_pct = (total_score / sum_weights) * 100
+    field_names_score_pct = safe_div(field_names_score, weights['field_names']) * 100
+    field_descriptions_score_pct = safe_div(field_descriptions_score, weights['field_descriptions']) * 100
+    field_name_similarity_score_pct = safe_div(field_name_similarity_score, weights['field_name_similarity']) * 100
+    field_types_score_pct = safe_div(field_types_score, weights['field_types']) * 100
+    keys_presence_score_pct = safe_div(keys_presence_score, weights['keys_presence']) * 100
 
-    # -------------------
+    total_score_pct = safe_div(total_score, sum_weights) * 100
+
+
     # Return Detailed Info
-    # -------------------
+
     penalized_fields = {
         'NonMeaningful': list(non_meaningful_fields),
         'NonMeaningful_NoDescription': list(non_meaningful_no_description),

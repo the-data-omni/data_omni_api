@@ -38,3 +38,5 @@ def generate_natural_language_question(query):
         print(e.status_code)
         print(e.response)
         return f"Error generating question for: {query}"
+
+
