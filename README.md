@@ -9,9 +9,7 @@ A lightweight Flask API designed to compute and return a score for your database
   Your browser does not support the video tag.
 </video>
 
-[![Data Omni Scoring](https://raw.githubusercontent.com/the-data-omni/data_omni_api/main/.github/assets/data_omni_proto.gif
-
-[![Short Demo](https://img.youtube.com/vi/iby_mqXOcbU/hqdefault.jpg)](https://youtu.be/iby_mqXOcbU)
+[![Data Omni Scoring](https://raw.githubusercontent.com/the-data-omni/data_omni_api/main/.github/assets/data_omni_proto.gif)](https://youtu.be/iby_mqXOcbU)
 
 ## Features
 
