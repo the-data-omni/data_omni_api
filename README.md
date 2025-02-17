@@ -4,6 +4,13 @@ A lightweight Flask API designed to compute and return a score for your database
 
 ---
 
+<video width="600" controls>
+  <source src="https://github.com/the-data-omni/data_omni_api/blob/demo.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>
+
+[![Data Omni Scoring](https://raw.githubusercontent.com/the-data-omni/data_omni_api/main/.github/assets/data_omni_proto.gif)](https://youtu.be/iby_mqXOcbU)
+
 ## Features
 
 - **Schema scoring**: Evaluates tables and columns based on:
