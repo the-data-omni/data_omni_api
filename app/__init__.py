@@ -21,10 +21,10 @@ def create_app():
     # Apply CORS globally with specific configuration
     CORS(
         app,
-        resources={r"/*": {"origins": ["http://localhost:4200", "http://localhost:3000","http://127.0.0.1", "http://127.0.0.1:5000"]}},
+        resources={r"/*": {"origins": ["http://localhost:4200", "http://localhost:3000","http://127.0.0.1", "http://127.0.0.1:3000"]}},
         supports_credentials=True,
-     #    allow_headers=["Content-Type", "Authorization"],
-     #    expose_headers=["Content-Length", "X-Custom-Header"],
+        allow_headers=["Content-Type", "Authorization"],
+        expose_headers=["Content-Length", "X-Custom-Header"],
     )
 
     # Register Blueprints

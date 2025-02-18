@@ -46,37 +46,54 @@ def get_bigquery_client_from_session():
 
 def get_queries(client: bigquery.Client, time_interval="10 day") -> dict:
     """
-    Call a query to get historical queries from the past `time_interval`
-    (defaults to 90 days). Returns a dictionary with query text as keys
-    and the number of times each query appeared as values.
+    Call a query to get historical queries from the past `time_interval`.
+    Returns a dict keyed by query text, with metadata such as count, avg bytes,
+    avg exec time, etc.
 
-    :param client: A BigQuery client (user-specific or default).
+    :param client: A BigQuery client.
     :type client: bigquery.Client
     :param time_interval: The time interval for querying historical data.
     :type time_interval: str
-    :return: Dictionary of queries and their frequencies.
+    :return: Dictionary of queries and their aggregated information.
     :rtype: dict
     """
-    query = (
-        f"""
-        SELECT query, creation_time
+    query = f"""
+        SELECT
+          query,
+          ANY_VALUE(job_type) AS job_type,
+          ANY_VALUE(statement_type) AS statement_type,
+          MAX(creation_time) AS creation_time,
+          AVG(total_bytes_processed) AS avg_total_bytes_processed,
+          AVG(query_info.performance_insights.avg_previous_execution_ms) AS avg_execution_time,
+          COUNT(*) AS query_count
         FROM region-us.INFORMATION_SCHEMA.JOBS_BY_PROJECT
-        WHERE creation_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {time_interval})
+        WHERE
+          creation_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL {time_interval})
           AND state = 'DONE'
           AND job_type = 'QUERY'
           AND NOT REGEXP_CONTAINS(LOWER(query), r'\\binformation_schema\\b')
-        """
-    )
+        GROUP BY
+          query
+    """
+
     client = get_bigquery_client_from_session()
     query_job = client.query(query)
-    query_counts = {}
+    
+    # Initialize a dictionary to hold query -> metadata
+    query_data = {}
 
     for row in query_job.result():
         query_text = row.query
-        query_counts[query_text] = query_counts.get(query_text, 0) + 1
+        query_data[query_text] = {
+            "job_type": row.job_type,
+            "statement_type": row.statement_type,
+            "creation_time": row.creation_time,
+            "avg_total_bytes_processed": row.avg_total_bytes_processed,
+            "avg_execution_time": row.avg_execution_time,
+            "count": row.query_count
+        }
 
-    return query_counts
-
+    return query_data
 
 def get_bigquery_info(client: bigquery.Client):
     """
