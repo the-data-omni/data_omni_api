@@ -16,8 +16,25 @@ def generate_natural_language_question(query):
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "You are a helpful assistant that translates BigQuery SQL queries into natural language questions."},
-                {"role": "user", "content": f"Translate the following BigQuery SQL query into a natural language question:\n```sql\n{query}\n```"}
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful assistant that translates BigQuery SQL queries into natural language questions.\n\n"
+                        "Here is an example of the style we want:\n\n"
+                        "EXAMPLE SQL:\n"
+                        "  SELECT name\n"
+                        "  FROM employees\n"
+                        "  WHERE department = 'Sales';\n\n"
+                        "EXAMPLE NATURAL LANGUAGE QUESTION:\n"
+                        "  'Which employees work in the Sales department?'\n\n"
+                        "Notice that the question focuses on what a user might *ask* in plain English.\n\n"
+                        "Now, please produce a similar natural language question for the following SQL query:"
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": f"```sql\n{query}\n```"
+                }
             ],
             max_tokens=150,
             n=1,
@@ -28,7 +45,7 @@ def generate_natural_language_question(query):
         return question
     except openai.APIConnectionError as e:
         print("The server could not be reached")
-        print(e.__cause__)  # an underlying Exception, likely raised within httpx.
+        print(e.__cause__)
         return f"Error generating question for: {query}"
     except openai.RateLimitError as e:
         print("A 429 status code was received; we should back off a bit. %s", {e})
