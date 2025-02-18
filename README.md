@@ -202,5 +202,4 @@ For questions, suggestions, or feedback, please open an issue in the repository 
 
 ---
 
-**Happy Coding!**  
 Feel free to file an issue for any bugs or feature requests. If you find this project useful, consider giving it a star on GitHub!

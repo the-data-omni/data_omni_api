@@ -1,6 +1,8 @@
 from flask import Blueprint, request, session, jsonify
 from google.oauth2 import service_account
 
+import app
+
 upload_bp = Blueprint("upload_bp", __name__)
 
 @upload_bp.route("/upload_service_account", methods=["POST", "OPTIONS"])
